@@ -8,6 +8,8 @@ Features
 •	Security stuff like Helmet, CORS, rate limit, body size limit, and hashing passwords with bcrypt
 •	Checking .env values when the app starts using Joi
 •	Database migrations (synchronize: false) and a seeder script for default users
+•   Email verification and password reset using Nodemailer and Ethereal Email
+•   Tokens with expiration, one-time use clearing, unverified login check, and generic reset/resend messages to block email enumeration
 
 Setup Instructions
 •	Create the project folder, open it in VS Code, run npm init -y, and install the required packages (express, typeorm, mysql2, reflect-metadata, dotenv, joi, helmet, cors, express-rate-limit, winston, bcrypt, uuid, plus the TypeScript and @types packages)
@@ -26,6 +28,16 @@ Environment Variables
 •	FRONTEND_URL — the frontend URL allowed by CORS (default is http://localhost:4200)
 •   JWT_SECRET — secret key (at least 32 characters) used to sign and verify JWT tokens
 •   JWT_EXPIRES_IN — token expiration time (default is 24h)
+•   SMTP_HOST — SMTP host (smtp.ethereal.email)
+•   SMTP_PORT — SMTP port (587)
+•   SMTP_USER — Ethereal username
+•   SMTP_PASS — Ethereal password
+•   EMAIL_FROM — sender email address
+•   APP_URL — app base URL (http://localhost:3000)
+
+How to Test with Ethereal
+•   Run npm run dev and send a register or forgot-password request in Postman.
+•   Open the preview URL printed in the terminal
 
 API Endpoints
 •	GET /health — checks if the server is up and connected to the database
@@ -34,6 +46,11 @@ API Endpoints
 •	POST /api/users — creates a new user with name, email, password, and optional age
 •	PUT /api/users/:id — updates a user's info (name, email, age, or isActive) by id
 •	DELETE /api/users/:id — deletes a user by id
+•   POST /api/auth/register — registers a user, sets isVerified: false, creates a 24h verification token, and sends a verification email
+•   GET /api/auth/verify-email?token=TOKEN — verifies the email and clears the verification token
+•   POST /api/auth/resend-verification — sends a new verification token if the email exists and is not verified yet
+•   POST /api/auth/forgot-password — creates a 1h reset token for verified users and sends a reset email (always returns generic success)
+•   POST /api/auth/reset-password — checks the reset token, hashes the new password, and clears the reset token
 
  Authentication Flow
 - A user sends emai land  password to POST /api/auth/login.
@@ -42,6 +59,10 @@ API Endpoints
 - If valid, the server signs a JWT with userId and email using JWT_SECRET and JWT_EXPIRES_IN, then returns the token and basic user info.
 - For protected routes, the client sends Authorization: Bearer token in the request headers.
 - authMiddleware extracts and verifies the token, attaches { userId, email } to req.user, and calls next(), or returns 401 Unauthorized if missing, invalid, or expired.
+- Registering at POST /api/auth/register hashes the password with bcrypt, saves a 32-byte crypto verificationToken (24h expiry), and emails the verification link.
+- GET /api/auth/verify-email sets isVerified to true and clears the token so it can't be reused.
+- Login checks that isVerified is true before allowing sign-in.
+- POST /api/auth/forgot-password sends a 1h reset token (always returning a generic message), and POST /api/auth/reset-password updates the password and clears the token.
 
 Migrations and Seeders
 •	Generate a migration (when you change an entity):npm run migration:generate -- src/migrations/InitialSchema
@@ -74,3 +95,15 @@ Reflection Answers #9
 16. What is the difference between a short-lived access token and a long-lived refresh token? When would you use each? An access token is short-lived and sent on API requests to access protected routes, while a refresh token lasts longer and is used to get a new access token without logging in again. Short access tokens limit risk if stolen, and refresh tokens keep sessions convenient.
 17. How does the auth middleware know which user is making the request? It reads the Bearer token from the Authorization header, verifies it with AuthService.verifyToken(), and attaches the decoded user data userId and email to req.user.
 18. If you had to implement role-based authorization (e.g., admin vs. regular user), how would you modify your current setup? I would add a role column to the User entity and migration, include role in the JWT payload, and add a middleware after authMiddleware that checks if the user's role is allowed on that route.
+
+Reflection Answers #10
+19. Why is email verification important for security? What problems does it prevent? It proves the user owns the email they signed up with. It stops fake/bot accounts, signing up with someone else's email, and unverified users from logging in or resetting passwords.
+20. Explain the "always return success" pattern in forgot password. Why is it a security best practice? It returns the same generic message whether the email exists or not. That keeps attackers from guessing which emails are registered.
+21. What's the difference between a verification token and a reset token? Why do they have different expiration times? A verification token activates a new account, while a reset token changes an existing password. Reset tokens expire sooner (1h) because password changes are higher risk, while verification tokens last longer (24h) for users to check their email.
+22. Why do we use crypto.randomBytes(32) instead of Math.random() or Date.now() for token generation? crypto.randomBytes(32) makes strong, unpredictable tokens. Math.random() isn't secure/predictable, and Date.now() is just a timestamp that is easier to guess.
+23. What happens if a user never verifies their email? How does your system handle this? Their account stays isVerified: false. They can't log in or get password reset emails, and they can use resend-verification to get a new link.
+24. Explain why tokens are cleared after use. What security risk does this prevent? Setting tokens and expiry dates to null after use makes them one-time only. This stops replay attacks if an old link is found later.
+25. What is email enumeration and how does your implementation prevent it? It's testing emails on endpoints to see which ones exist. forgotPassword and resendVerification prevent it by returning the same generic response either way.
+26. If you had to implement two-factor authentication (2FA) on top of this system, how would you approach it? I'd add 2FA fields/secret/codes to User, let verified users turn on TOTP or email codes, and require passing that second step after login.
+27. What are the trade-offs between using Ethereal (test service) vs. SendGrid (production service)? Ethereal is free and easy for local testing with preview emails, while SendGrid works for real production emails and tracking but needs setup, domain auth, and paid plans.
+28. How would you handle a situation where a user's email provider marks your emails as spam? I'd set up SPF, DKIM, and DMARC, keep the email text clean, watch bounces/spam reports, and tell users to check spam or resend.
